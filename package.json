@@ -1,0 +1,35 @@
+{
+  "name": "intelligent-compliance-agent",
+  "version": "1.0.0",
+  "description": "AI-powered compliance monitoring system for financial services",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.backend.json",
+    "watch": "tsc -w",
+    "test": "jest",
+    "cdk": "cdk",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy",
+    "synth": "cdk synth",
+    "bootstrap": "cdk bootstrap",
+    "deploy:full": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+    "deploy:bash": "bash scripts/deploy.sh",
+    "frontend:install": "cd frontend && npm install",
+    "frontend:start": "cd frontend && npm start",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:test": "cd frontend && npm test"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.8",
+    "@types/node": "^20.9.0",
+    "aws-cdk": "^2.110.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.2.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.110.0",
+    "constructs": "^10.3.0",
+    "source-map-support": "^0.5.21"
+  }
+}
