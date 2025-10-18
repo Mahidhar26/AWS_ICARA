@@ -1,13 +1,29 @@
 #!/usr/bin/env python3
 """
-Test script for the enhanced communication analyzer.
-Tests the preprocessing, metadata extraction, and analysis functions.
+Unit tests for AI model integration and business logic in communication analyzer.
+Tests mocked Bedrock responses, risk scoring calculations, and violation detection accuracy.
 """
 
 import json
 import re
+import unittest
+from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Tuple
+import sys
+import os
+
+# Add the current directory to Python path for imports
+sys.path.insert(0, os.path.dirname(__file__))
+
+# Mock environment variables for testing
+os.environ['COMMUNICATION_ANALYSIS_TABLE'] = 'test-communication-analysis'
+os.environ['AGENT_SESSIONS_TABLE'] = 'test-agent-sessions'
+os.environ['ALERT_QUEUE_URL'] = 'test-alert-queue'
+os.environ['BEDROCK_REGION'] = 'us-east-1'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
+os.environ['AWS_ACCESS_KEY_ID'] = 'test-key'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'test-secret'
 
 # Mock the functions locally to test without AWS dependencies
 def sanitize_content(content: str) -> str:
@@ -363,10 +379,405 @@ def test_metadata_extraction():
         print(f"  {key}: {value}")
     print()
 
-if __name__ == "__main__":
-    print("=== Communication Analyzer Test Suite ===\n")
+class TestCommunicationAnalyzer(unittest.TestCase):
+    """Unit tests for communication analyzer AI model integration and business logic."""
     
+    def setUp(self):
+        """Set up test fixtures."""
+        self.mock_bedrock_response = {
+            'body': Mock()
+        }
+        self.mock_bedrock_response['body'].read.return_value = json.dumps({
+            'output': {
+                'message': {
+                    'content': [{'text': '{"riskLevel": "HIGH", "confidence": 0.9, "violations": []}'}]
+                }
+            }
+        }).encode()
+    
+    @patch('index.bedrock_runtime')
+    def test_nova_pro_integration_earnings_manipulation(self, mock_bedrock):
+        """Test Nova Pro model integration for earnings manipulation detection."""
+        # Mock Bedrock response for earnings manipulation
+        mock_response_body = Mock()
+        mock_response_body.read.return_value = json.dumps({
+            'output': {
+                'message': {
+                    'content': [{
+                        'text': json.dumps({
+                            "businessContext": "earnings_discussion",
+                            "intentAnalysis": "clearly_suspicious",
+                            "keyTopics": ["earnings", "booking", "delay"],
+                            "riskIndicators": ["earnings_pressure", "timing_manipulation"],
+                            "contextualRiskScore": 0.85
+                        })
+                    }]
+                }
+            }
+        }).encode()
+        
+        mock_bedrock.invoke_model.return_value = {
+            'body': mock_response_body
+        }
+        
+        # Import after mocking
+        from index import perform_contextual_analysis
+        
+        content = "We need to delay booking that $2.5M loss until next quarter to meet earnings."
+        metadata = {'sender': 'test@company.com', 'urgencyScore': 0.8}
+        
+        result = perform_contextual_analysis(content, metadata)
+        
+        self.assertEqual(result['businessContext'], 'earnings_discussion')
+        self.assertEqual(result['intentAnalysis'], 'clearly_suspicious')
+        self.assertGreaterEqual(result['contextualRiskScore'], 0.8)
+        self.assertIn('earnings_pressure', result['riskIndicators'])
+    
+    @patch('index.bedrock_runtime')
+    def test_nova_pro_integration_insider_trading(self, mock_bedrock):
+        """Test Nova Pro model integration for insider trading detection."""
+        # Mock Bedrock response for insider trading
+        mock_response_body = Mock()
+        mock_response_body.read.return_value = json.dumps({
+            'output': {
+                'message': {
+                    'content': [{
+                        'text': json.dumps({
+                            "detectedViolations": [{
+                                "type": "INSIDER_TRADING",
+                                "regulation": "FINRA Rule 2010",
+                                "confidence": 0.92,
+                                "evidence": ["inside information about merger"],
+                                "severity": "CRITICAL",
+                                "explanation": "Communication contains references to material non-public information"
+                            }],
+                            "violationScore": 0.92
+                        })
+                    }]
+                }
+            }
+        }).encode()
+        
+        mock_bedrock.invoke_model.return_value = {
+            'body': mock_response_body
+        }
+        
+        # Import after mocking
+        from index import detect_specific_violations
+        
+        content = "I have inside information about the merger. Buy before announcement."
+        metadata = {'sender': 'insider@company.com'}
+        context = {'businessContext': 'transaction_planning'}
+        
+        result = detect_specific_violations(content, metadata, context)
+        
+        self.assertEqual(len(result['detectedViolations']), 1)
+        self.assertEqual(result['detectedViolations'][0]['type'], 'INSIDER_TRADING')
+        self.assertGreaterEqual(result['detectedViolations'][0]['confidence'], 0.9)
+        self.assertGreaterEqual(result['violationScore'], 0.9)
+    
+    def test_risk_scoring_calculation_accuracy(self):
+        """Test risk scoring calculations with known input/output pairs."""
+        # Import after mocking
+        from index import calculate_risk_score
+        
+        # Test case 1: High violation score with contextual factors
+        violations = {
+            'violationScore': 0.9,
+            'detectedViolations': [
+                {'confidence': 0.95, 'type': 'EARNINGS_MANIPULATION'}
+            ]
+        }
+        metadata = {
+            'urgencyScore': 0.8,
+            'afterHours': True,
+            'financialDiscussion': True,
+            'communicationTone': ['secretive', 'pressured']
+        }
+        context = {'contextualRiskScore': 0.85}
+        
+        result = calculate_risk_score(violations, metadata, context)
+        
+        self.assertEqual(result['riskLevel'], 'CRITICAL')
+        self.assertGreaterEqual(result['riskScore'], 0.8)
+        self.assertGreaterEqual(result['confidence'], 0.9)
+        
+        # Test case 2: Low risk legitimate business communication
+        violations_low = {'violationScore': 0.0, 'detectedViolations': []}
+        metadata_low = {
+            'urgencyScore': 0.1,
+            'afterHours': False,
+            'financialDiscussion': False,
+            'communicationTone': []
+        }
+        context_low = {'contextualRiskScore': 0.1}
+        
+        result_low = calculate_risk_score(violations_low, metadata_low, context_low)
+        
+        self.assertEqual(result_low['riskLevel'], 'LOW')
+        self.assertLessEqual(result_low['riskScore'], 0.3)
+        self.assertGreaterEqual(result_low['confidence'], 0.7)
+    
+    def test_violation_detection_accuracy(self):
+        """Test violation detection accuracy with known patterns."""
+        # Import after mocking
+        from index import fallback_analysis
+        
+        # Test earnings manipulation detection
+        earnings_content = "We need to delay booking that loss and massage the figures to hit the number."
+        result = fallback_analysis(earnings_content)
+        
+        self.assertIn('EARNINGS_MANIPULATION', [v['type'] for v in result['violations']])
+        self.assertIn(result['riskLevel'], ['HIGH', 'CRITICAL'])
+        self.assertGreaterEqual(result['confidence'], 0.8)
+        
+        # Test insider trading detection
+        insider_content = "I have material non-public information about the merger talks."
+        result = fallback_analysis(insider_content)
+        
+        self.assertIn('INSIDER_TRADING', [v['type'] for v in result['violations']])
+        self.assertEqual(result['riskLevel'], 'CRITICAL')
+        self.assertGreaterEqual(result['confidence'], 0.85)
+        
+        # Test legitimate business communication
+        legitimate_content = "Please review the quarterly report and provide feedback."
+        result = fallback_analysis(legitimate_content)
+        
+        self.assertEqual(len(result['violations']), 0)
+        self.assertEqual(result['riskLevel'], 'LOW')
+        self.assertGreaterEqual(result['confidence'], 0.7)
+    
+    def test_preprocessing_metadata_extraction(self):
+        """Test preprocessing and metadata extraction accuracy."""
+        # Import after mocking
+        from index import preprocess_communication
+        
+        content = """We need to process $25,000 in AAPL stock by March 15, 2024.
+        This is critical and urgent. Call me at 555-123-4567."""
+        
+        metadata = {
+            'sender': 'john@company.com',
+            'timestamp': '2024-10-15T22:30:00Z'  # After hours
+        }
+        
+        processed_content, enriched_metadata = preprocess_communication(content, metadata)
+        
+        # Verify metadata extraction
+        self.assertIn('$25,000', enriched_metadata['financialAmounts'])
+        # Stock symbols include the word "stock" in the regex pattern
+        self.assertTrue(any('AAPL' in symbol for symbol in enriched_metadata['stockSymbols']))
+        self.assertIn('March 15, 2024', enriched_metadata['datesReferenced'])
+        self.assertIn('555-123-4567', enriched_metadata['phonesReferenced'])
+        self.assertIn('urgent', enriched_metadata['urgencyIndicators'])
+        # Check if afterHours key exists and verify timestamp parsing
+        # The timestamp '2024-10-15T22:30:00Z' should be detected as after hours (22:30 = 10:30 PM)
+        self.assertTrue(enriched_metadata.get('afterHours', False), 
+                       f"Expected after hours detection for timestamp 22:30, got: {enriched_metadata.get('afterHours')}")
+        self.assertIn('pressured', enriched_metadata['communicationTone'])
+    
+    @patch('index.sessions_table')
+    def test_agent_session_management(self, mock_table):
+        """Test agent session creation and context management."""
+        from index import get_or_create_agent_session
+        
+        # Mock DynamoDB response for new session
+        mock_table.get_item.side_effect = ClientError(
+            {'Error': {'Code': 'ResourceNotFoundException'}}, 'GetItem'
+        )
+        mock_table.put_item.return_value = {}
+        
+        metadata = {
+            'urgencyScore': 0.7,
+            'afterHours': True,
+            'financialDiscussion': True,
+            'financialAmounts': ['$10,000'],
+            'stockSymbols': ['AAPL']
+        }
+        
+        session_id = get_or_create_agent_session('test@company.com', metadata)
+        
+        self.assertTrue(session_id.startswith('session-test@company.com'))
+        mock_table.put_item.assert_called_once()
+        
+        # Verify session record structure
+        call_args = mock_table.put_item.call_args[1]['Item']
+        self.assertEqual(call_args['sender'], 'test@company.com')
+        self.assertIn('contextData', call_args)
+        self.assertIn('communicationPatterns', call_args['contextData'])
+    
+    @patch('index.sqs')
+    def test_alert_generation_for_high_risk(self, mock_sqs):
+        """Test alert generation for high-risk communications."""
+        from index import send_alert_to_queue
+        
+        analysis_record = {
+            'id': 'test-analysis-123',
+            'messageId': 'msg-456',
+            'riskLevel': 'CRITICAL',
+            'violations': [
+                {
+                    'type': 'EARNINGS_MANIPULATION',
+                    'regulation': 'SEC Rule 10b-5',
+                    'confidence': 0.95
+                }
+            ],
+            'sender': 'test@company.com',
+            'createdAt': '2024-10-15T10:00:00Z'
+        }
+        
+        send_alert_to_queue(analysis_record)
+        
+        mock_sqs.send_message.assert_called_once()
+        call_args = mock_sqs.send_message.call_args[1]
+        
+        self.assertEqual(call_args['QueueUrl'], 'test-alert-queue')
+        message_body = json.loads(call_args['MessageBody'])
+        self.assertEqual(message_body['alertType'], 'COMMUNICATION_VIOLATION')
+        self.assertEqual(message_body['riskLevel'], 'CRITICAL')
+        self.assertEqual(message_body['analysisId'], 'test-analysis-123')
+    
+    def test_json_response_parsing(self):
+        """Test JSON response parsing from Nova Pro with error handling."""
+        from index import parse_json_response
+        
+        # Test valid JSON response
+        valid_response = 'Here is the analysis: {"riskLevel": "HIGH", "confidence": 0.9}'
+        result = parse_json_response(valid_response, "test_analysis")
+        
+        self.assertEqual(result['riskLevel'], 'HIGH')
+        self.assertEqual(result['confidence'], 0.9)
+        
+        # Test invalid JSON response
+        invalid_response = 'This is not JSON format'
+        result = parse_json_response(invalid_response, "test_analysis")
+        
+        self.assertEqual(result, {})
+    
+    def test_contextual_risk_factors(self):
+        """Test contextual risk factor calculations."""
+        from index import analyze_communication_context
+        
+        content = "This is urgent and confidential. We must meet the deadline."
+        metadata = {
+            'timestamp': '2024-10-15T23:30:00Z',  # After hours
+            'urgencyIndicators': ['urgent'],
+            'financialAmounts': ['$50,000']
+        }
+        
+        context = analyze_communication_context(content, metadata)
+        
+        self.assertTrue(context['afterHours'])
+        self.assertGreater(context['urgencyScore'], 0.3)
+        self.assertIn('secretive', context['communicationTone'])
+        self.assertIn('pressured', context['communicationTone'])
+
+
+class TestBusinessLogicIntegration(unittest.TestCase):
+    """Test business logic integration and end-to-end workflows."""
+    
+    @patch('index.bedrock_runtime')
+    @patch('index.communication_table')
+    @patch('index.sqs')
+    @patch('index.sessions_table')
+    def test_end_to_end_analysis_workflow(self, mock_sessions, mock_sqs, mock_table, mock_bedrock):
+        """Test complete analysis workflow from input to alert generation."""
+        from index import handler
+        
+        # Mock Bedrock responses for multi-step analysis
+        mock_response_body1 = Mock()
+        mock_response_body1.read.return_value = json.dumps({
+            'output': {
+                'message': {
+                    'content': [{
+                        'text': json.dumps({
+                            "businessContext": "earnings_discussion",
+                            "intentAnalysis": "clearly_suspicious",
+                            "contextualRiskScore": 0.9
+                        })
+                    }]
+                }
+            }
+        }).encode()
+        
+        mock_response_body2 = Mock()
+        mock_response_body2.read.return_value = json.dumps({
+            'output': {
+                'message': {
+                    'content': [{
+                        'text': json.dumps({
+                            "detectedViolations": [{
+                                "type": "EARNINGS_MANIPULATION",
+                                "regulation": "SEC Rule 10b-5",
+                                "confidence": 0.95
+                            }],
+                            "violationScore": 0.95
+                        })
+                    }]
+                }
+            }
+        }).encode()
+        
+        # Set up mock responses for multiple calls
+        mock_bedrock.invoke_model.side_effect = [
+            {'body': mock_response_body1},
+            {'body': mock_response_body2}
+        ]
+        
+        mock_table.put_item.return_value = {}
+        mock_sqs.send_message.return_value = {}
+        mock_sessions.put_item.return_value = {}
+        mock_sessions.get_item.side_effect = Exception("Not found")  # Force new session creation
+        
+        # Test event
+        event = {
+            'body': json.dumps({
+                'messageId': 'test-msg-123',
+                'content': 'We need to delay booking that $2M loss to meet earnings.',
+                'metadata': {
+                    'sender': 'cfo@company.com',
+                    'recipients': ['ceo@company.com'],
+                    'messageType': 'email',
+                    'timestamp': '2024-10-15T22:00:00Z'
+                }
+            })
+        }
+        
+        response = handler(event, {})
+        
+        # Verify response
+        self.assertEqual(response['statusCode'], 200)
+        response_body = json.loads(response['body'])
+        self.assertIn('analysisId', response_body)
+        # The risk level should be CRITICAL based on our mocked high-risk response
+        self.assertIn(response_body['riskLevel'], ['HIGH', 'CRITICAL'])
+        self.assertGreaterEqual(response_body['confidence'], 0.8)
+        
+        # Verify database storage
+        mock_table.put_item.assert_called_once()
+        
+        # Verify alert generation for high-risk content
+        if response_body['riskLevel'] in ['HIGH', 'CRITICAL']:
+            mock_sqs.send_message.assert_called_once()
+
+
+if __name__ == "__main__":
+    print("=== Communication Analyzer Unit Tests ===\n")
+    
+    # Import required functions for standalone testing
     try:
+        from index import (
+            preprocess_communication, sanitize_content, 
+            extract_communication_metadata, analyze_communication_context,
+            fallback_analysis, parse_json_response
+        )
+        from botocore.exceptions import ClientError
+        
+        # Run unit tests
+        unittest.main(verbosity=2, exit=False)
+        
+        print("\n=== Legacy Test Functions ===\n")
+        
+        # Run legacy test functions for compatibility
         test_preprocessing()
         test_fallback_analysis()
         test_content_sanitization()

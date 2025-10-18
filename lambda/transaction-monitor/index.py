@@ -896,3 +896,54 @@ def create_error_response(status_code: int, message: str) -> Dict[str, Any]:
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
     }
+
+# External API Integration Functions
+import requests
+from functools import lru_cache
+
+@lru_cache(maxsize=200)
+def screen_ofac(entity_name: str, country_code: str) -> Dict[str, Any]:
+    """
+    Screen entity against OFAC sanctions lists with caching and error handling.
+    """
+    try:
+        # Mock OFAC API integration
+        url = f"https://api.treasury.gov/ofac/search?name={entity_name}&country={country_code}"
+        headers = {
+            'User-Agent': 'Intelligent-Compliance-Agent/1.0',
+            'Accept': 'application/json'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 429:
+            return {
+                'error': 'Rate limit exceeded',
+                'screening_result': {
+                    'match_found': False,
+                    'risk_level': 'UNKNOWN',
+                    'note': 'Rate limited - manual review required'
+                }
+            }
+        else:
+            return {
+                'error': f'OFAC API error: {response.status_code}',
+                'screening_result': {
+                    'match_found': False,
+                    'risk_level': 'UNKNOWN',
+                    'note': 'API error - manual screening required'
+                }
+            }
+            
+    except Exception as e:
+        logger.error(f"Error screening OFAC: {str(e)}")
+        return {
+            'error': str(e),
+            'screening_result': {
+                'match_found': False,
+                'risk_level': 'UNKNOWN',
+                'note': 'Error during screening - manual review required'
+            }
+        }

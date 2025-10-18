@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Test script for the unified risk assessment engine.
+Unit tests for the unified risk assessment engine.
 Tests core functionality including contextual scoring, correlation analysis, and alert generation.
 """
 
 import json
 import sys
 import os
+import unittest
+from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 
@@ -20,18 +22,21 @@ os.environ['AGENT_SESSIONS_TABLE'] = 'test-agent-sessions'
 os.environ['RISK_ASSESSMENTS_TABLE'] = 'test-risk-assessments'
 os.environ['ALERT_QUEUE_URL'] = 'test-alert-queue'
 os.environ['BEDROCK_REGION'] = 'us-east-1'
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
-# Import the functions to test
-from index import (
-    calculate_contextual_risk_score,
-    analyze_risk_correlations,
-    calculate_overall_risk_assessment,
-    generate_contextual_alerts,
-    create_audit_trail,
-    execute_autonomous_decisions,
-    determine_escalation_path,
-    generate_risk_insights
-)
+# Mock AWS services before importing
+with patch('boto3.resource'), patch('boto3.client'):
+    # Import the functions to test
+    from index import (
+        calculate_contextual_risk_score,
+        analyze_risk_correlations,
+        calculate_overall_risk_assessment,
+        generate_contextual_alerts,
+        create_audit_trail,
+        execute_autonomous_decisions,
+        determine_escalation_path,
+        generate_risk_insights
+    )
 
 def test_contextual_risk_scoring():
     """Test contextual risk scoring functionality."""

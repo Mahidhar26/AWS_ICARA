@@ -12,6 +12,10 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as sns from 'aws-cdk-lib/aws-sns';
+import * as applicationautoscaling from 'aws-cdk-lib/aws-applicationautoscaling';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -99,12 +103,14 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // DynamoDB Tables with KMS encryption
+    // DynamoDB Tables with KMS encryption and auto-scaling
     const communicationAnalysisTable = new dynamodb.Table(this, 'CommunicationAnalysisTable', {
       tableName: 'communication-analysis',
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'timestamp', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecoverySpecification: {
         pointInTimeRecoveryEnabled: true,
@@ -118,7 +124,9 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       tableName: 'transaction-alerts',
       partitionKey: { name: 'id', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
       pointInTimeRecoverySpecification: {
         pointInTimeRecoveryEnabled: true,
       },
@@ -137,7 +145,9 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
     const agentSessionsTable = new dynamodb.Table(this, 'AgentSessionsTable', {
       tableName: 'agent-sessions',
       partitionKey: { name: 'sessionId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 3,
+      writeCapacity: 3,
       timeToLiveAttribute: 'ttl',
       encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
       encryptionKey: complianceKmsKey,
@@ -148,7 +158,9 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       tableName: 'risk-assessments',
       partitionKey: { name: 'assessmentId', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      billingMode: dynamodb.BillingMode.PROVISIONED,
+      readCapacity: 5,
+      writeCapacity: 5,
       timeToLiveAttribute: 'ttl',
       pointInTimeRecoverySpecification: {
         pointInTimeRecoveryEnabled: true,
@@ -328,20 +340,22 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       },
     });
 
-    // Lambda Functions
+    // Lambda Functions with optimized performance settings
     const communicationAnalyzerFunction = new lambda.Function(this, 'CommunicationAnalyzerFunction', {
       functionName: 'communication-analyzer',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/communication-analyzer')),
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'index.handler',
       timeout: cdk.Duration.seconds(30),
-      memorySize: 1024,
+      memorySize: 1536, // Optimized for AI model processing
+      reservedConcurrentExecutions: 50, // Cost control
       role: lambdaExecutionRole,
       environment: {
         COMMUNICATION_ANALYSIS_TABLE: communicationAnalysisTable.tableName,
         AGENT_SESSIONS_TABLE: agentSessionsTable.tableName,
         ALERT_QUEUE_URL: alertProcessingQueue.queueUrl,
         BEDROCK_REGION: cdk.Stack.of(this).region,
+        PYTHONPATH: '/var/runtime:/var/task:/opt/python',
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -351,14 +365,16 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/transaction-monitor')),
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'index.handler',
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 512,
+      timeout: cdk.Duration.seconds(15),
+      memorySize: 768, // Optimized for transaction processing
+      reservedConcurrentExecutions: 100, // Higher concurrency for transaction volume
       role: lambdaExecutionRole,
       environment: {
         TRANSACTION_ALERTS_TABLE: transactionAlertsTable.tableName,
         AGENT_SESSIONS_TABLE: agentSessionsTable.tableName,
         ALERT_QUEUE_URL: alertProcessingQueue.queueUrl,
         BEDROCK_REGION: cdk.Stack.of(this).region,
+        PYTHONPATH: '/var/runtime:/var/task:/opt/python',
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -383,8 +399,9 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/risk-assessment')),
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'index.handler',
-      timeout: cdk.Duration.seconds(120),
-      memorySize: 1024,
+      timeout: cdk.Duration.seconds(60), // Reduced for performance requirement
+      memorySize: 1536, // Optimized for complex risk calculations
+      reservedConcurrentExecutions: 25, // Balanced for cost control
       role: lambdaExecutionRole,
       environment: {
         COMMUNICATION_ANALYSIS_TABLE: communicationAnalysisTable.tableName,
@@ -393,6 +410,7 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
         RISK_ASSESSMENTS_TABLE: riskAssessmentsTable.tableName,
         ALERT_QUEUE_URL: alertProcessingQueue.queueUrl,
         BEDROCK_REGION: cdk.Stack.of(this).region,
+        PYTHONPATH: '/var/runtime:/var/task:/opt/python',
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -405,14 +423,303 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
       })
     );
 
+    // SNS Topic for CloudWatch Alarms
+    const alertTopic = new sns.Topic(this, 'PerformanceAlertTopic', {
+      topicName: 'compliance-agent-performance-alerts',
+      displayName: 'Intelligent Compliance Agent Performance Alerts',
+    });
+
+    // DynamoDB Auto Scaling Configuration
+    const communicationTableScaling = communicationAnalysisTable.autoScaleReadCapacity({
+      minCapacity: 5,
+      maxCapacity: 100,
+    });
+    communicationTableScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    const communicationTableWriteScaling = communicationAnalysisTable.autoScaleWriteCapacity({
+      minCapacity: 5,
+      maxCapacity: 100,
+    });
+    communicationTableWriteScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    const transactionTableScaling = transactionAlertsTable.autoScaleReadCapacity({
+      minCapacity: 5,
+      maxCapacity: 200,
+    });
+    transactionTableScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    const transactionTableWriteScaling = transactionAlertsTable.autoScaleWriteCapacity({
+      minCapacity: 5,
+      maxCapacity: 200,
+    });
+    transactionTableWriteScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    const riskTableScaling = riskAssessmentsTable.autoScaleReadCapacity({
+      minCapacity: 5,
+      maxCapacity: 50,
+    });
+    riskTableScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    const riskTableWriteScaling = riskAssessmentsTable.autoScaleWriteCapacity({
+      minCapacity: 5,
+      maxCapacity: 50,
+    });
+    riskTableWriteScaling.scaleOnUtilization({
+      targetUtilizationPercent: 70,
+      scaleInCooldown: cdk.Duration.seconds(300),
+      scaleOutCooldown: cdk.Duration.seconds(60),
+    });
+
+    // CloudWatch Custom Metrics and Alarms
+    const communicationLatencyAlarm = new cloudwatch.Alarm(this, 'CommunicationAnalysisLatencyAlarm', {
+      alarmName: 'communication-analysis-high-latency',
+      alarmDescription: 'Communication analysis taking longer than 5 seconds',
+      metric: communicationAnalyzerFunction.metricDuration({
+        statistic: 'Average',
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 5000, // 5 seconds in milliseconds
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    communicationLatencyAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    const transactionLatencyAlarm = new cloudwatch.Alarm(this, 'TransactionMonitorLatencyAlarm', {
+      alarmName: 'transaction-monitor-high-latency',
+      alarmDescription: 'Transaction monitoring taking longer than 2 seconds',
+      metric: transactionMonitorFunction.metricDuration({
+        statistic: 'Average',
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 2000, // 2 seconds in milliseconds
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    transactionLatencyAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    const communicationErrorAlarm = new cloudwatch.Alarm(this, 'CommunicationAnalysisErrorAlarm', {
+      alarmName: 'communication-analysis-high-error-rate',
+      alarmDescription: 'High error rate in communication analysis',
+      metric: communicationAnalyzerFunction.metricErrors({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 5,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    communicationErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    const transactionErrorAlarm = new cloudwatch.Alarm(this, 'TransactionMonitorErrorAlarm', {
+      alarmName: 'transaction-monitor-high-error-rate',
+      alarmDescription: 'High error rate in transaction monitoring',
+      metric: transactionMonitorFunction.metricErrors({
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(5),
+      }),
+      threshold: 10,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    transactionErrorAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // DynamoDB Throttling Alarms
+    const communicationThrottleAlarm = new cloudwatch.Alarm(this, 'CommunicationTableThrottleAlarm', {
+      alarmName: 'communication-table-throttling',
+      alarmDescription: 'Communication analysis table experiencing throttling',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/DynamoDB',
+        metricName: 'ThrottledRequests',
+        dimensionsMap: {
+          TableName: communicationAnalysisTable.tableName,
+        },
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    communicationThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    const transactionThrottleAlarm = new cloudwatch.Alarm(this, 'TransactionTableThrottleAlarm', {
+      alarmName: 'transaction-table-throttling',
+      alarmDescription: 'Transaction alerts table experiencing throttling',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/DynamoDB',
+        metricName: 'ThrottledRequests',
+        dimensionsMap: {
+          TableName: transactionAlertsTable.tableName,
+        },
+        statistic: 'Sum',
+        period: cdk.Duration.minutes(1),
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    transactionThrottleAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // Cost Control Alarms
+    const lambdaCostAlarm = new cloudwatch.Alarm(this, 'LambdaCostAlarm', {
+      alarmName: 'lambda-cost-control',
+      alarmDescription: 'Lambda invocations approaching budget limits',
+      metric: new cloudwatch.Metric({
+        namespace: 'AWS/Lambda',
+        metricName: 'Invocations',
+        statistic: 'Sum',
+        period: cdk.Duration.hours(1),
+      }),
+      threshold: 10000, // 10k invocations per hour
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    lambdaCostAlarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
+
+    // Custom CloudWatch Dashboard
+    const performanceDashboard = new cloudwatch.Dashboard(this, 'PerformanceDashboard', {
+      dashboardName: 'intelligent-compliance-agent-performance',
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Lambda Function Latency',
+            left: [
+              communicationAnalyzerFunction.metricDuration({
+                label: 'Communication Analyzer',
+                statistic: 'Average',
+              }),
+              transactionMonitorFunction.metricDuration({
+                label: 'Transaction Monitor',
+                statistic: 'Average',
+              }),
+              riskAssessmentFunction.metricDuration({
+                label: 'Risk Assessment',
+                statistic: 'Average',
+              }),
+            ],
+            leftYAxis: {
+              min: 0,
+              max: 5000,
+              label: 'Duration (ms)',
+            },
+            period: cdk.Duration.minutes(1),
+            width: 12,
+            height: 6,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Lambda Function Error Rates',
+            left: [
+              communicationAnalyzerFunction.metricErrors({
+                label: 'Communication Analyzer Errors',
+                statistic: 'Sum',
+              }),
+              transactionMonitorFunction.metricErrors({
+                label: 'Transaction Monitor Errors',
+                statistic: 'Sum',
+              }),
+              riskAssessmentFunction.metricErrors({
+                label: 'Risk Assessment Errors',
+                statistic: 'Sum',
+              }),
+            ],
+            leftYAxis: {
+              min: 0,
+              label: 'Error Count',
+            },
+            period: cdk.Duration.minutes(5),
+            width: 12,
+            height: 6,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: 'DynamoDB Read/Write Capacity Utilization',
+            left: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/DynamoDB',
+                metricName: 'ConsumedReadCapacityUnits',
+                dimensionsMap: {
+                  TableName: communicationAnalysisTable.tableName,
+                },
+                statistic: 'Sum',
+                label: 'Communication Table Read',
+              }),
+              new cloudwatch.Metric({
+                namespace: 'AWS/DynamoDB',
+                metricName: 'ConsumedWriteCapacityUnits',
+                dimensionsMap: {
+                  TableName: communicationAnalysisTable.tableName,
+                },
+                statistic: 'Sum',
+                label: 'Communication Table Write',
+              }),
+            ],
+            right: [
+              new cloudwatch.Metric({
+                namespace: 'AWS/DynamoDB',
+                metricName: 'ConsumedReadCapacityUnits',
+                dimensionsMap: {
+                  TableName: transactionAlertsTable.tableName,
+                },
+                statistic: 'Sum',
+                label: 'Transaction Table Read',
+              }),
+              new cloudwatch.Metric({
+                namespace: 'AWS/DynamoDB',
+                metricName: 'ConsumedWriteCapacityUnits',
+                dimensionsMap: {
+                  TableName: transactionAlertsTable.tableName,
+                },
+                statistic: 'Sum',
+                label: 'Transaction Table Write',
+              }),
+            ],
+            period: cdk.Duration.minutes(1),
+            width: 12,
+            height: 6,
+          }),
+        ],
+      ],
+    });
+
     // Create API Gateway Lambda function for authentication and routing
     const apiGatewayFunction = new lambda.Function(this, 'APIGatewayFunction', {
       functionName: 'api-gateway-handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/api-gateway')),
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'index.handler',
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 512,
+      timeout: cdk.Duration.seconds(15), // Fast API responses
+      memorySize: 768, // Optimized for API processing
+      reservedConcurrentExecutions: 200, // High concurrency for API requests
       role: lambdaExecutionRole,
       environment: {
         COMMUNICATION_ANALYSIS_TABLE: communicationAnalysisTable.tableName,
@@ -421,7 +728,8 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
         AGENT_SESSIONS_TABLE: agentSessionsTable.tableName,
         JWT_SECRET: 'demo-jwt-secret-key-for-hackathon',
         CORS_ORIGINS: '*',
-        DEMO_MODE: 'true'
+        DEMO_MODE: 'true',
+        PYTHONPATH: '/var/runtime:/var/task:/opt/python',
       },
       logRetention: logs.RetentionDays.ONE_WEEK,
     });
@@ -898,6 +1206,74 @@ export class IntelligentComplianceAgentStack extends cdk.Stack {
         deploymentTime: new Date().toISOString(),
       }),
       description: 'Complete deployment information for hackathon judges',
+    });
+
+    // Performance Monitoring Outputs
+    new cdk.CfnOutput(this, 'PerformanceAlertTopicArn', {
+      value: alertTopic.topicArn,
+      description: 'SNS topic ARN for performance alerts',
+    });
+
+    new cdk.CfnOutput(this, 'PerformanceDashboardUrl', {
+      value: `https://${cdk.Stack.of(this).region}.console.aws.amazon.com/cloudwatch/home?region=${cdk.Stack.of(this).region}#dashboards:name=${performanceDashboard.dashboardName}`,
+      description: 'CloudWatch dashboard URL for performance monitoring',
+    });
+
+    new cdk.CfnOutput(this, 'LambdaPerformanceSettings', {
+      value: JSON.stringify({
+        communicationAnalyzer: {
+          memorySize: 1536,
+          timeout: 30,
+          reservedConcurrency: 50
+        },
+        transactionMonitor: {
+          memorySize: 768,
+          timeout: 15,
+          reservedConcurrency: 100
+        },
+        riskAssessment: {
+          memorySize: 1536,
+          timeout: 60,
+          reservedConcurrency: 25
+        },
+        apiGateway: {
+          memorySize: 768,
+          timeout: 15,
+          reservedConcurrency: 200
+        }
+      }),
+      description: 'Optimized Lambda function performance settings',
+    });
+
+    new cdk.CfnOutput(this, 'DynamoDBAutoScalingSettings', {
+      value: JSON.stringify({
+        readCapacity: {
+          min: 5,
+          max: 200,
+          targetUtilization: 70
+        },
+        writeCapacity: {
+          min: 5,
+          max: 200,
+          targetUtilization: 70
+        },
+        scaleInCooldown: 300,
+        scaleOutCooldown: 60
+      }),
+      description: 'DynamoDB auto-scaling configuration with cost controls',
+    });
+
+    new cdk.CfnOutput(this, 'PerformanceRequirements', {
+      value: JSON.stringify({
+        communicationAnalysis: 'Sub-5-second response time',
+        transactionMonitoring: 'Sub-2-second response time',
+        apiGateway: 'Sub-1-second response time',
+        throughput: '100+ communications per hour',
+        scalability: '10x normal volume support',
+        errorRate: 'Less than 1% error rate',
+        availability: '99.9% uptime during business hours'
+      }),
+      description: 'Performance requirements and SLA targets',
     });
   }
 }

@@ -1,0 +1,49 @@
+{
+  "timestamp": "2025-10-16T15:18:04.352208",
+  "test_type": "integration",
+  "test_scope": "end_to_end_workflows",
+  "requirements_covered": [
+    "1.1",
+    "2.1",
+    "3.1"
+  ],
+  "test_categories": [
+    {
+      "category": "Communication Analysis Pipeline",
+      "description": "Tests complete communication analysis from API input to alert generation",
+      "tests": [
+        "test_complete_communication_analysis_pipeline",
+        "test_communication_analysis_with_external_api_integration",
+        "test_communication_analysis_error_handling"
+      ]
+    },
+    {
+      "category": "Transaction Monitoring Workflow",
+      "description": "Tests transaction monitoring with structuring detection scenarios",
+      "tests": [
+        "test_structuring_detection_workflow",
+        "test_bsa_threshold_detection_workflow",
+        "test_geographic_risk_assessment_workflow",
+        "test_transaction_monitoring_error_handling"
+      ]
+    },
+    {
+      "category": "External API Integrations",
+      "description": "Tests external API integrations with mock regulatory data sources",
+      "tests": [
+        "test_sec_edgar_api_integration",
+        "test_finra_api_integration",
+        "test_ofac_screening_integration",
+        "test_external_api_error_handling",
+        "test_regulatory_data_caching"
+      ]
+    },
+    {
+      "category": "Unified Risk Assessment",
+      "description": "Tests unified risk assessment combining communication and transaction analysis",
+      "tests": [
+        "test_unified_risk_assessment_workflow"
+      ]
+    }
+  ]
+}

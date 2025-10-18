@@ -791,3 +791,97 @@ def create_error_response(status_code: int, message: str) -> Dict[str, Any]:
             'timestamp': datetime.now(timezone.utc).isoformat()
         })
     }
+
+# External API Integration Functions
+import requests
+from functools import lru_cache
+
+@lru_cache(maxsize=100)
+def fetch_regulatory_context(violation_type: str, regulation: str) -> Dict[str, Any]:
+    """
+    Fetch regulatory context from external APIs with caching and error handling.
+    """
+    try:
+        # Mock SEC EDGAR API integration
+        if 'SEC' in regulation:
+            url = f"https://api.sec.gov/edgar/search?q={violation_type}&rule={regulation}"
+            headers = {
+                'User-Agent': 'Intelligent-Compliance-Agent/1.0',
+                'Accept': 'application/json'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=5)
+            
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                return {
+                    'error': 'Rate limit exceeded',
+                    'status_code': 429,
+                    'fallback': {
+                        'rule': regulation,
+                        'description': 'Rate limited - using cached data'
+                    }
+                }
+            else:
+                return {
+                    'error': f'API error: {response.status_code}',
+                    'fallback': {
+                        'rule': regulation,
+                        'description': 'Fallback regulatory data'
+                    }
+                }
+        
+        # Default fallback
+        return {
+            'rule': regulation,
+            'description': f'Regulatory context for {violation_type}',
+            'fallback': True
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching regulatory context: {str(e)}")
+        return {
+            'error': str(e),
+            'fallback': {
+                'rule': regulation,
+                'description': 'Error fetching regulatory data - using fallback'
+            }
+        }
+
+@lru_cache(maxsize=50)
+def fetch_finra_rules(violation_type: str) -> Dict[str, Any]:
+    """
+    Fetch FINRA rules and violations data with caching.
+    """
+    try:
+        url = f"https://api.finra.org/rules/search?q={violation_type}"
+        headers = {
+            'User-Agent': 'Intelligent-Compliance-Agent/1.0',
+            'Accept': 'application/json'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {
+                'error': f'FINRA API error: {response.status_code}',
+                'rules': [{
+                    'rule_number': 'FINRA Rule 2010',
+                    'title': 'Standards of Commercial Honor and Principles of Trade',
+                    'description': 'Fallback rule data'
+                }]
+            }
+            
+    except Exception as e:
+        logger.error(f"Error fetching FINRA rules: {str(e)}")
+        return {
+            'error': str(e),
+            'rules': [{
+                'rule_number': 'FINRA Rule 2010',
+                'title': 'Standards of Commercial Honor and Principles of Trade',
+                'description': 'Error fetching FINRA data - using fallback'
+            }]
+        }
